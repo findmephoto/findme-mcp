@@ -1,0 +1,19 @@
+# Smithery registry config — https://smithery.ai
+# Auto-discovered when this repo is listed on Smithery.
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    required:
+      - findmeApiKey
+    properties:
+      findmeApiKey:
+        type: string
+        title: FindMe API Key
+        description: "Your personal FindMe Photo API key (starts with fm_live_). Create one at https://findme.photo/settings/api"
+  commandFunction: |
+    (config) => ({
+      command: 'npx',
+      args: ['-y', 'findme-mcp'],
+      env: { FINDME_API_KEY: config.findmeApiKey },
+    })

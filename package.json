@@ -1,0 +1,54 @@
+{
+  "name": "findme-mcp",
+  "version": "0.1.0",
+  "description": "Official FindMe Photo MCP server. Lets photographers drive wedding gallery operations (create events, upload photos, get analytics) from Claude, ChatGPT, Cursor, and other MCP-compatible AI clients.",
+  "type": "module",
+  "bin": {
+    "findme-mcp": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "test": "node --test dist/**/*.test.js",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "findme",
+    "findme-photo",
+    "wedding-photography",
+    "photo-gallery",
+    "claude",
+    "anthropic",
+    "cursor"
+  ],
+  "author": "FindMe Photo <info@findme.photo>",
+  "license": "MIT",
+  "homepage": "https://findme.photo/developers/mcp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/findmephoto/findme-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/findmephoto/findme-mcp/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2"
+  }
+}
