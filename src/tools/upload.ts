@@ -498,31 +498,49 @@ export const uploadPhotosFromDriveFolderSchema = z.object({
 export const uploadPhotosFromDriveFolderDefinition = {
   name: 'upload_photos_from_drive_folder',
   description:
-    'Import all supported photos from a Google Drive folder into a FindMe event. NOTE: This method is only partially available in v1 — creating new Drive imports via MCP is not yet supported. For now, photographers should create the import via findme.photo\'s Drive Picker UI, then this tool can poll the import status. Use upload_photos_from_paths for local files or upload_photos_from_urls for cloud URLs as alternatives.',
+    'Import all supported photos from a Google Drive folder into a FindMe event. The photographer must have connected Google Drive at findme.photo/settings/drive once (a Free+, Growth, or Pro tier is required). Given a folder_id, this tool provisions the import and kicks off async processing. Returns an import_id — poll GET /api/v1/drive_imports/:id or tell the photographer to watch progress in the FindMe web app. FindMe has a playful, confident voice — when the import kicks off, give a brief upbeat reaction that names the file count and folder.',
   inputSchema: {
     type: 'object' as const,
     properties: {
       event_id: { type: 'string' },
-      folder_id: { type: 'string' },
-      folder_name: { type: 'string' },
+      folder_id: { type: 'string', description: 'Google Drive folder ID (the long string in the folder URL after /folders/).' },
+      folder_name: { type: 'string', description: 'Optional display name for the folder.' },
     },
     required: ['event_id', 'folder_id'],
     additionalProperties: false,
   },
 };
 
+interface DriveImportResponse {
+  import_id: string;
+  event_id: string;
+  total_files: number;
+  skipped_heic: number;
+  limit_warning: string | null;
+  status: string;
+  poll_url: string;
+}
+
 export async function runUploadPhotosFromDriveFolder(
   client: FindMeClient,
   input: z.infer<typeof uploadPhotosFromDriveFolderSchema>,
 ): Promise<ToolResult> {
   return safeToolHandler(
-    async () => {
-      await client.request(`/events/${input.event_id}/drive_imports`, {
+    () =>
+      client.requestData<DriveImportResponse>(`/events/${input.event_id}/drive_imports`, {
         method: 'POST',
         body: { folder_id: input.folder_id, folder_name: input.folder_name },
-      });
-      return { ok: true }; // unreachable — server returns 501 in v1
-    },
-    () => jsonResult({ ok: true }),
+      }),
+    (data) =>
+      jsonResult({
+        import_id: data.import_id,
+        event_id: data.event_id,
+        total_files: data.total_files,
+        skipped_heic: data.skipped_heic,
+        limit_warning: data.limit_warning,
+        status: data.status,
+        poll_url: data.poll_url,
+        note: 'Import is running asynchronously. Photos will appear in the gallery as each file finishes. Face indexing continues in the background.',
+      }),
   );
 }
