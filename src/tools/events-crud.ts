@@ -3,7 +3,7 @@
 import { z } from 'zod';
 
 import type { FindMeClient } from '../client.js';
-import { jsonResult, safeToolHandler, textResult, type ToolResult } from '../tool-helpers.js';
+import { jsonResult, safeToolHandler, type ToolResult } from '../tool-helpers.js';
 
 // ──────────────────────────────────────────────────────────
 // Shared
@@ -43,7 +43,7 @@ export const createEventSchema = z.object({
 export const createEventDefinition = {
   name: 'create_event',
   description:
-    'Create a new FindMe event (a wedding/photo gallery). Returns the event id, a shareable access code, and gallery + QR URLs. Use when the photographer says things like "create an event for Sarah & Mike on April 22" or "make a new gallery called Johnson Wedding".',
+    'Create a new FindMe event (a wedding/photo gallery). Returns the event id, a shareable access code, and gallery + QR URLs. Use when the photographer says things like "create an event for Sarah & Mike on April 22" or "make a new gallery called Johnson Wedding". FindMe has a playful, confident voice — when the event is created, give a short upbeat reaction that names the gallery and its access code. Do not use the same phrasing twice.',
   inputSchema: {
     type: 'object' as const,
     properties: {
@@ -244,7 +244,14 @@ export async function runDeleteEvent(
       await client.request<undefined>(`/events/${input.event_id}`, { method: 'DELETE' });
       return input.event_id;
     },
-    (id) => textResult(`Event ${id} deleted. You have 7 days to restore it with restore_event.`),
+    (id) =>
+      jsonResult({
+        deleted: true,
+        event_id: id,
+        recovery_window_days: 7,
+        restore_tool: 'restore_event',
+        note: 'Soft-delete complete. Gallery is hidden immediately. Photos and faces purge after 7 days unless restored.',
+      }),
   );
 }
 

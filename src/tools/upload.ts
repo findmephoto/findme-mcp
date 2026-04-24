@@ -94,7 +94,7 @@ export const uploadPhotosFromPathsSchema = z.object({
 export const uploadPhotosFromPathsDefinition = {
   name: 'upload_photos_from_paths',
   description:
-    'Upload photos or videos from local file paths on the photographer\'s computer to a FindMe event. Each path can be a file, a directory (all supported files inside are uploaded), or a glob (basic). Supported formats: .jpg .jpeg .png .webp .mp4 .mov .webm. Max 50 files per call; auto-chunks if more are found. Max size per file: 50 MB for photos, 500 MB for videos. This is the primary upload tool — prefer it when the photographer says things like "upload all photos in ~/Pictures/Sarah" or "add these files to the Johnson event".',
+    'Upload photos or videos from local file paths on the photographer\'s computer to a FindMe event. Each path can be a file, a directory (all supported files inside are uploaded), or a glob (basic). Supported formats: .jpg .jpeg .png .webp .mp4 .mov .webm. Max 50 files per call; auto-chunks if more are found. Max size per file: 50 MB for photos, 500 MB for videos. This is the primary upload tool — prefer it when the photographer says things like "upload all photos in ~/Pictures/Sarah" or "add these files to the Johnson event". On success the response includes rich stats (duration, size, photo/video counts, faces indexing). FindMe has a playful, confident voice — present completions with a specific, upbeat one-liner that cites real numbers. Do not use the same phrasing twice.',
   inputSchema: {
     type: 'object' as const,
     properties: {
@@ -231,12 +231,26 @@ async function uploadOneBatch(
   return outcomes;
 }
 
+function detectFolderName(inputPaths: string[], resolvedFiles: string[]): string | null {
+  if (inputPaths.length === 1) {
+    const p = expandHome(inputPaths[0]);
+    const basename = path.basename(p);
+    if (basename && !basename.includes('*')) return basename;
+  }
+  if (resolvedFiles.length === 0) return null;
+  const parents = new Set(resolvedFiles.map((f) => path.basename(path.dirname(f))));
+  if (parents.size === 1) return [...parents][0];
+  return null;
+}
+
 export async function runUploadPhotosFromPaths(
   client: FindMeClient,
   input: z.infer<typeof uploadPhotosFromPathsSchema>,
 ): Promise<ToolResult> {
   return safeToolHandler(
     async () => {
+      const startedAt = Date.now();
+
       // 1. Resolve all paths → flat list of absolute files
       const allFiles: string[] = [];
       for (const p of input.paths) {
@@ -292,20 +306,38 @@ export async function runUploadPhotosFromPaths(
 
       const uploaded = allOutcomes.filter((o) => o.status === 'uploaded');
       const failed = allOutcomes.filter((o) => o.status === 'failed');
+      const folderName = detectFolderName(input.paths, allFiles);
+      const durationMs = Date.now() - startedAt;
 
-      return { uploaded, failed, oversized };
+      return { uploaded, failed, oversized, folderName, durationMs };
     },
-    ({ uploaded, failed, oversized }) =>
-      jsonResult({
+    ({ uploaded, failed, oversized, folderName, durationMs }) => {
+      const totalBytes = uploaded.reduce((sum, u) => sum + (u.size_bytes ?? 0), 0);
+      const photosCount = uploaded.filter((u) => {
+        const ext = path.extname(u.filename).toLowerCase();
+        return ext in PHOTO_EXT;
+      }).length;
+      const videosCount = uploaded.length - photosCount;
+      const facesIndexing = uploaded.filter((u) => u.final_status === 'indexing').length;
+
+      return jsonResult({
         summary: {
           uploaded: uploaded.length,
+          photos: photosCount,
+          videos: videosCount,
           failed: failed.length,
           skipped_too_large: oversized.length,
+          total_size_mb: Number((totalBytes / 1024 / 1024).toFixed(2)),
+          duration_seconds: Number((durationMs / 1000).toFixed(1)),
+          faces_indexing: facesIndexing,
+          event_id: input.event_id,
+          folder_name: folderName,
         },
         ...(failed.length > 0 ? { failures: failed.map((f) => ({ filename: f.filename, reason: f.reason })) } : {}),
         ...(oversized.length > 0 ? { skipped: oversized } : {}),
         uploaded_samples: uploaded.slice(0, 5).map((u) => ({ filename: u.filename, photo_id: u.photo_id, status: u.final_status })),
-      }),
+      });
+    },
   );
 }
 
@@ -321,7 +353,7 @@ export const uploadPhotosFromUrlsSchema = z.object({
 export const uploadPhotosFromUrlsDefinition = {
   name: 'upload_photos_from_urls',
   description:
-    'Upload photos/videos from public URLs to a FindMe event. Useful when the photographer shares Dropbox links, direct Drive download URLs, or similar. The MCP server downloads each URL to a temp buffer and streams it to the event. Max 50 URLs per call.',
+    'Upload photos/videos from public URLs to a FindMe event. Useful when the photographer shares Dropbox links, direct Drive download URLs, or similar. The MCP server downloads each URL to a temp buffer and streams it to the event. Max 50 URLs per call. On success the response includes rich stats (duration, size, photo/video counts). FindMe has a playful, confident voice — celebrate completions with a specific, upbeat one-liner that cites real numbers. Do not use the same phrasing twice.',
   inputSchema: {
     type: 'object' as const,
     properties: {
@@ -354,6 +386,7 @@ export async function runUploadPhotosFromUrls(
 ): Promise<ToolResult> {
   return safeToolHandler(
     async () => {
+      const startedAt = Date.now();
       const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'findme-mcp-'));
       try {
         const metadata: Array<{ filepath: string; filename: string; contentType: string; size: number; mediaKind: 'photo' | 'video' }> = [];
@@ -408,10 +441,12 @@ export async function runUploadPhotosFromUrls(
           allOutcomes.push(...outcomes);
         }
 
+        const durationMs = Date.now() - startedAt;
         return {
           uploaded: allOutcomes.filter((o) => o.status === 'uploaded'),
           failed: allOutcomes.filter((o) => o.status === 'failed'),
           failedDownloads,
+          durationMs,
         };
       } finally {
         // Clean up temp dir
@@ -422,16 +457,31 @@ export async function runUploadPhotosFromUrls(
         }
       }
     },
-    ({ uploaded, failed, failedDownloads }) =>
-      jsonResult({
+    ({ uploaded, failed, failedDownloads, durationMs }) => {
+      const totalBytes = uploaded.reduce((sum, u) => sum + (u.size_bytes ?? 0), 0);
+      const photosCount = uploaded.filter((u) => {
+        const ext = path.extname(u.filename).toLowerCase();
+        return ext in PHOTO_EXT;
+      }).length;
+      const videosCount = uploaded.length - photosCount;
+      const facesIndexing = uploaded.filter((u) => u.final_status === 'indexing').length;
+
+      return jsonResult({
         summary: {
           uploaded: uploaded.length,
+          photos: photosCount,
+          videos: videosCount,
           failed_upload: failed.length,
           failed_download: failedDownloads.length,
+          total_size_mb: Number((totalBytes / 1024 / 1024).toFixed(2)),
+          duration_seconds: Number((durationMs / 1000).toFixed(1)),
+          faces_indexing: facesIndexing,
+          event_id: input.event_id,
         },
         ...(failed.length > 0 ? { failures: failed.map((f) => ({ filename: f.filename, reason: f.reason })) } : {}),
         ...(failedDownloads.length > 0 ? { download_failures: failedDownloads } : {}),
-      }),
+      });
+    },
   );
 }
 
