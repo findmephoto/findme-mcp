@@ -1,0 +1,32 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.findmephoto/findme-mcp",
+  "title": "FindMe Photo",
+  "description": "Create wedding galleries, upload photos, and pull analytics on FindMe Photo from any AI assistant.",
+  "version": "0.1.0",
+  "websiteUrl": "https://findme.photo",
+  "repository": {
+    "url": "https://github.com/findmephoto/findme-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "findme-mcp",
+      "version": "0.1.0",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "FINDME_API_KEY",
+          "description": "Personal API key from https://findme.photo/settings/api (starts with fm_live_)",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}
