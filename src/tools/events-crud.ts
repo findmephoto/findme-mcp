@@ -33,17 +33,22 @@ interface EventResource {
 // create_event
 // ──────────────────────────────────────────────────────────
 
+const ALBUM_QUALITY_VALUES = ['800px', '3000px', '4000px', '15mb'] as const;
+
 export const createEventSchema = z.object({
   name: z.string().min(1).max(200),
   event_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   description: z.string().max(2000).optional(),
   tag: z.string().max(80).optional(),
+  album_quality: z.enum(ALBUM_QUALITY_VALUES).optional(),
+  enable_downloads: z.boolean().optional(),
+  is_collaborative: z.boolean().optional(),
 });
 
 export const createEventDefinition = {
   name: 'create_event',
   description:
-    'Create a new FindMe event (a wedding/photo gallery). Returns the event id, a shareable access code, and gallery + QR URLs. Use when the photographer says things like "create an event for Sarah & Mike on April 22" or "make a new gallery called Johnson Wedding". FindMe has a playful, confident voice — when the event is created, give a short upbeat reaction that names the gallery and its access code. Do not use the same phrasing twice.',
+    'Create a new FindMe event (a wedding/photo gallery). Returns the event id, a shareable access code, and gallery + QR URLs. Use when the photographer says things like "create an event for Sarah & Mike on April 22" or "make a new gallery called Johnson Wedding". Three album settings are required at creation: album_quality (the resolution photos are stored at; tier-capped), enable_downloads (whether guests can download), is_collaborative (whether other people can upload too). If any of those three is missing, the tool returns a "needs_input" response listing the user\'s allowed options and recommended defaults — ask the photographer for their answers, then call create_event again with the full payload. FindMe has a playful, confident voice — when the event is created, give a short upbeat reaction that names the gallery and its access code, and mention the album_quality (e.g. "stored at 4000px, your plan\'s top setting"). Do not use the same phrasing twice.',
   inputSchema: {
     type: 'object' as const,
     properties: {
@@ -51,19 +56,92 @@ export const createEventDefinition = {
       event_date: { type: 'string', description: 'Event date in YYYY-MM-DD format. Optional.' },
       description: { type: 'string', description: 'Optional description.' },
       tag: { type: 'string', description: 'Optional tag/category (e.g. "wedding", "corporate").' },
+      album_quality: {
+        type: 'string',
+        enum: [...ALBUM_QUALITY_VALUES],
+        description: 'Storage resolution. Tier-capped — call without this and the tool will return your allowed options.',
+      },
+      enable_downloads: {
+        type: 'boolean',
+        description: 'Whether guests can download photos from the gallery.',
+      },
+      is_collaborative: {
+        type: 'boolean',
+        description: 'Whether the album is shareable/collaborative — other people can upload photos to it.',
+      },
     },
     required: ['name'],
     additionalProperties: false,
   },
 };
 
+interface TierLimitsResponse {
+  tier: string;
+  display_name: string;
+  max_album_quality: (typeof ALBUM_QUALITY_VALUES)[number];
+  allowed_album_qualities: Array<(typeof ALBUM_QUALITY_VALUES)[number]>;
+  max_albums: number | null;
+}
+
 export async function runCreateEvent(
   client: FindMeClient,
   input: z.infer<typeof createEventSchema>,
 ): Promise<ToolResult> {
+  // Elicitation: if any of the 3 album settings is missing, fetch the
+  // user's tier limits and ask. The LLM relays to the user, then calls
+  // create_event again with the full payload.
+  const missing: string[] = [];
+  if (input.album_quality === undefined) missing.push('album_quality');
+  if (input.enable_downloads === undefined) missing.push('enable_downloads');
+  if (input.is_collaborative === undefined) missing.push('is_collaborative');
+
+  if (missing.length > 0) {
+    return safeToolHandler(
+      () => client.requestData<TierLimitsResponse>('/me/tier_limits'),
+      (limits) =>
+        jsonResult({
+          needs_input: true,
+          message:
+            'Before creating the album, ask the photographer for these settings. Use the options + defaults listed below — the album_quality options are capped to their plan.',
+          tier: limits.display_name,
+          questions: [
+            ...(input.album_quality === undefined
+              ? [{
+                  field: 'album_quality',
+                  prompt: `What quality should photos be stored at? Your ${limits.display_name} plan caps at ${limits.max_album_quality}.`,
+                  options: limits.allowed_album_qualities,
+                  recommended: limits.max_album_quality,
+                }]
+              : []),
+            ...(input.enable_downloads === undefined
+              ? [{
+                  field: 'enable_downloads',
+                  prompt: 'Should guests be able to download photos from the gallery?',
+                  options: [true, false],
+                  recommended: true,
+                }]
+              : []),
+            ...(input.is_collaborative === undefined
+              ? [{
+                  field: 'is_collaborative',
+                  prompt: 'Should this be a collaborative album that other people can upload to?',
+                  options: [true, false],
+                  recommended: false,
+                }]
+              : []),
+          ],
+          next_action: 'Once you have the answers, call create_event again with name + the 3 settings filled in.',
+        }),
+    );
+  }
+
   return safeToolHandler(
     () =>
-      client.requestData<EventResource>('/events', {
+      client.requestData<EventResource & {
+        album_quality?: string;
+        enable_downloads?: boolean;
+        is_collaborative?: boolean;
+      }>('/events', {
         method: 'POST',
         body: input,
       }),
@@ -74,6 +152,9 @@ export async function runCreateEvent(
         access_code: data.access_code,
         gallery_url: data.gallery_url,
         event_date: data.event_date,
+        album_quality: data.album_quality,
+        enable_downloads: data.enable_downloads,
+        is_collaborative: data.is_collaborative,
         created_at: data.created_at,
       }),
   );
