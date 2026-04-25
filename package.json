@@ -1,6 +1,6 @@
 {
   "name": "findme-mcp",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "mcpName": "io.github.findmephoto/findme-mcp",
   "description": "Official FindMe Photo MCP server. Lets photographers drive wedding gallery operations (create events, upload photos, get analytics) from Claude, ChatGPT, Cursor, and other MCP-compatible AI clients.",
   "type": "module",
@@ -8,6 +8,20 @@
     "findme-mcp": "./dist/index.js"
   },
   "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./http": {
+      "types": "./dist/http.d.ts",
+      "import": "./dist/http.js"
+    },
+    "./registry": {
+      "types": "./dist/registry.d.ts",
+      "import": "./dist/registry.js"
+    }
+  },
   "files": [
     "dist",
     "README.md",
