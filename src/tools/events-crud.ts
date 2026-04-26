@@ -3,6 +3,7 @@
 import { z } from 'zod';
 
 import type { FindMeClient } from '../client.js';
+import { type Elicitor, noopElicitor } from '../elicit.js';
 import { jsonResult, safeToolHandler, type ToolResult } from '../tool-helpers.js';
 
 // ──────────────────────────────────────────────────────────
@@ -86,55 +87,165 @@ interface TierLimitsResponse {
 export async function runCreateEvent(
   client: FindMeClient,
   input: z.infer<typeof createEventSchema>,
+  elicitor: Elicitor = noopElicitor,
 ): Promise<ToolResult> {
-  // Elicitation: if any of the 3 album settings is missing, fetch the
-  // user's tier limits and ask. The LLM relays to the user, then calls
-  // create_event again with the full payload.
+  // If any of the 3 album settings is missing, ask the photographer.
+  // Preferred path: server.elicitInput → host renders a native form with radio
+  // buttons and toggles (deterministic UX, one click per answer).
+  // Fallback path: return a `needs_input` JSON payload describing the
+  // questions; the LLM relays them to the user as text.
   const missing: string[] = [];
   if (input.album_quality === undefined) missing.push('album_quality');
   if (input.enable_downloads === undefined) missing.push('enable_downloads');
   if (input.is_collaborative === undefined) missing.push('is_collaborative');
 
-  if (missing.length > 0) {
-    return safeToolHandler(
-      () => client.requestData<TierLimitsResponse>('/me/tier_limits'),
-      (limits) =>
-        jsonResult({
-          needs_input: true,
-          message:
-            'Before creating the album, ask the photographer for these settings. Use the options + defaults listed below — the album_quality options are capped to their plan.',
-          tier: limits.display_name,
-          questions: [
-            ...(input.album_quality === undefined
-              ? [{
-                  field: 'album_quality',
-                  prompt: `What quality should photos be stored at? Your ${limits.display_name} plan caps at ${limits.max_album_quality}.`,
-                  options: limits.allowed_album_qualities,
-                  recommended: limits.max_album_quality,
-                }]
-              : []),
-            ...(input.enable_downloads === undefined
-              ? [{
-                  field: 'enable_downloads',
-                  prompt: 'Should guests be able to download photos from the gallery?',
-                  options: [true, false],
-                  recommended: true,
-                }]
-              : []),
-            ...(input.is_collaborative === undefined
-              ? [{
-                  field: 'is_collaborative',
-                  prompt: 'Should this be a collaborative album that other people can upload to?',
-                  options: [true, false],
-                  recommended: false,
-                }]
-              : []),
-          ],
-          next_action: 'Once you have the answers, call create_event again with name + the 3 settings filled in.',
-        }),
-    );
+  if (missing.length === 0) {
+    return persistEvent(client, input);
   }
 
+  // Tier limits drive the album_quality option list either way. If the fetch
+  // fails (auth, network, etc.) the dispatcher's catch block surfaces it as a
+  // structured tool error.
+  const limits = await client.requestData<TierLimitsResponse>('/me/tier_limits');
+
+  if (elicitor.supportsForm()) {
+    const elicited = await tryElicitMissing(elicitor, input, missing, limits);
+    if (elicited.action === 'accept' && elicited.merged) {
+      return persistEvent(client, elicited.merged);
+    }
+    if (elicited.action === 'decline' || elicited.action === 'cancel') {
+      return jsonResult({
+        cancelled: true,
+        reason: elicited.action,
+        message:
+          elicited.action === 'decline'
+            ? 'Photographer declined to provide the album settings. Ask them informally if they\'d like to proceed and what they prefer.'
+            : 'Elicitation was cancelled before completion. No album was created.',
+      });
+    }
+    // action === 'error' falls through to the JSON `needs_input` fallback
+  }
+
+  // Fallback: structured needs_input JSON the LLM can read out as a text question.
+  return jsonResult({
+    needs_input: true,
+    message:
+      'Before creating the album, ask the photographer for these settings. Present each as a numbered multiple-choice list — do not ask open-ended. The album_quality options are capped to their plan.',
+    tier: limits.display_name,
+    questions: buildQuestions(input, limits),
+    next_action: 'Once you have the answers, call create_event again with name + the 3 settings filled in.',
+  });
+}
+
+function buildQuestions(
+  input: z.infer<typeof createEventSchema>,
+  limits: TierLimitsResponse,
+) {
+  return [
+    ...(input.album_quality === undefined
+      ? [{
+          field: 'album_quality',
+          prompt: `What quality should photos be stored at? Your ${limits.display_name} plan caps at ${limits.max_album_quality}.`,
+          options: limits.allowed_album_qualities,
+          recommended: limits.max_album_quality,
+        }]
+      : []),
+    ...(input.enable_downloads === undefined
+      ? [{
+          field: 'enable_downloads',
+          prompt: 'Should guests be able to download photos from the gallery?',
+          options: [true, false],
+          recommended: true,
+        }]
+      : []),
+    ...(input.is_collaborative === undefined
+      ? [{
+          field: 'is_collaborative',
+          prompt: 'Should this be a collaborative album that other people can upload to?',
+          options: [true, false],
+          recommended: false,
+        }]
+      : []),
+  ];
+}
+
+interface ElicitOutcome {
+  action: 'accept' | 'decline' | 'cancel' | 'error';
+  merged?: z.infer<typeof createEventSchema>;
+}
+
+async function tryElicitMissing(
+  elicitor: Elicitor,
+  input: z.infer<typeof createEventSchema>,
+  missing: string[],
+  limits: TierLimitsResponse,
+): Promise<ElicitOutcome> {
+  const properties: Record<string, unknown> = {};
+
+  if (missing.includes('album_quality')) {
+    properties.album_quality = {
+      type: 'string',
+      title: 'Album quality',
+      description: `Storage resolution. Your ${limits.display_name} plan caps at ${limits.max_album_quality}.`,
+      enum: limits.allowed_album_qualities,
+      default: limits.max_album_quality,
+    };
+  }
+  if (missing.includes('enable_downloads')) {
+    properties.enable_downloads = {
+      type: 'boolean',
+      title: 'Allow guest downloads',
+      description: 'Whether guests can download photos from the gallery.',
+      default: true,
+    };
+  }
+  if (missing.includes('is_collaborative')) {
+    properties.is_collaborative = {
+      type: 'boolean',
+      title: 'Collaborative album',
+      description: 'Whether other people can upload photos to this album.',
+      default: false,
+    };
+  }
+
+  try {
+    const result = await elicitor.elicit({
+      message: 'A few quick album settings before we create the gallery:',
+      requestedSchema: {
+        type: 'object',
+        properties,
+        required: missing,
+      },
+    });
+
+    if (result.action !== 'accept' || !result.content) {
+      return { action: result.action };
+    }
+
+    const answers = result.content;
+    const merged: z.infer<typeof createEventSchema> = {
+      ...input,
+      ...(typeof answers.album_quality === 'string'
+        ? { album_quality: answers.album_quality as typeof ALBUM_QUALITY_VALUES[number] }
+        : {}),
+      ...(typeof answers.enable_downloads === 'boolean'
+        ? { enable_downloads: answers.enable_downloads }
+        : {}),
+      ...(typeof answers.is_collaborative === 'boolean'
+        ? { is_collaborative: answers.is_collaborative }
+        : {}),
+    };
+
+    return { action: 'accept', merged };
+  } catch {
+    return { action: 'error' };
+  }
+}
+
+async function persistEvent(
+  client: FindMeClient,
+  input: z.infer<typeof createEventSchema>,
+): Promise<ToolResult> {
   return safeToolHandler(
     () =>
       client.requestData<EventResource & {

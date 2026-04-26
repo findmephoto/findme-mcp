@@ -5,6 +5,7 @@
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 
 import { FindMeClient } from './client.js';
+import { type Elicitor, noopElicitor } from './elicit.js';
 import { ToolError } from './errors.js';
 import type { ToolResult } from './tool-helpers.js';
 
@@ -65,9 +66,10 @@ export async function dispatchToolCall(
   client: FindMeClient,
   name: string,
   rawArgs: unknown,
-  opts: { remoteOnly?: boolean } = {},
+  opts: { remoteOnly?: boolean; elicitor?: Elicitor } = {},
 ): Promise<ToolResult> {
   const args = (rawArgs ?? {}) as Record<string, unknown>;
+  const elicitor = opts.elicitor ?? noopElicitor;
 
   if (opts.remoteOnly && LOCAL_ONLY_TOOL_NAMES.has(name)) {
     return new ToolError(
@@ -85,7 +87,7 @@ export async function dispatchToolCall(
       case 'upload_photos_from_drive_folder':
         return await runUploadPhotosFromDriveFolder(client, uploadPhotosFromDriveFolderSchema.parse(args));
       case 'create_event':
-        return await runCreateEvent(client, createEventSchema.parse(args));
+        return await runCreateEvent(client, createEventSchema.parse(args), elicitor);
       case 'list_events':
         return await runListEvents(client, listEventsSchema.parse(args));
       case 'get_event':

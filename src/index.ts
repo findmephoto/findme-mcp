@@ -11,6 +11,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 
 import { FindMeClient } from './client.js';
+import { makeElicitor } from './elicit.js';
 import { dispatchToolCall, TOOL_DEFINITIONS } from './registry.js';
 
 const PACKAGE_VERSION = '0.2.0';
@@ -37,11 +38,15 @@ function main(): void {
     tools: TOOL_DEFINITIONS,
   }));
 
+  // stdio is fully bidirectional → elicitation requests can round-trip.
+  const elicitor = makeElicitor(server, true);
+
   server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
     const result = await dispatchToolCall(
       getClient(),
       request.params.name,
       request.params.arguments,
+      { elicitor },
     );
     return result as unknown as CallToolResult;
   });

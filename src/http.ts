@@ -17,6 +17,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 
 import { FindMeClient } from './client.js';
+import { noopElicitor } from './elicit.js';
 import { ToolError } from './errors.js';
 import { dispatchToolCall, getRemoteSafeDefinitions } from './registry.js';
 
@@ -86,11 +87,14 @@ export function createMcpHandler(opts: CreateMcpHandlerOptions): (req: Request) 
     }));
 
     server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
+      // HTTP transport runs in single-JSON-response mode (`enableJsonResponse: true`),
+      // so server→client elicitation requests can't be carried mid-call. Tools fall
+      // back to the regular `needs_input` JSON pathway when supportsForm() is false.
       const result = await dispatchToolCall(
         client,
         request.params.name,
         request.params.arguments,
-        { remoteOnly: true },
+        { remoteOnly: true, elicitor: noopElicitor },
       );
       return result as unknown as CallToolResult;
     });
