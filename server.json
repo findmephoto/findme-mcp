@@ -3,7 +3,7 @@
   "name": "io.github.findmephoto/findme-mcp",
   "title": "FindMe Photo",
   "description": "Create wedding galleries, upload photos, and pull analytics on FindMe Photo from any AI assistant.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "websiteUrl": "https://findme.photo",
   "repository": {
     "url": "https://github.com/findmephoto/findme-mcp",
@@ -13,7 +13,7 @@
     {
       "registryType": "npm",
       "identifier": "findme-mcp",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"

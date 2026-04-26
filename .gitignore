@@ -3,6 +3,7 @@ dist/
 *.log
 .env
 .env.local
+.npmrc
 .DS_Store
 *.tsbuildinfo
 .tools/
