@@ -369,12 +369,14 @@ export const updateEventSchema = z.object({
   description: z.string().max(2000).nullable().optional(),
   tag: z.string().max(80).nullable().optional(),
   access_code: z.string().regex(/^[A-Z0-9]{4,12}$/).optional(),
+  enable_downloads: z.boolean().optional(),
+  is_collaborative: z.boolean().optional(),
 });
 
 export const updateEventDefinition = {
   name: 'update_event',
   description:
-    'Update fields on an existing event: name, event_date, description, tag, or access_code. Only include the fields you want to change. Use when the photographer wants to rename, re-date, or re-code a gallery.',
+    'Update fields on an existing event: name, event_date, description, tag, access_code, enable_downloads (toggle guest downloads on/off), or is_collaborative (toggle whether other people can upload). Only include the fields you want to change. Use when the photographer wants to rename, re-date, re-code, or flip the downloads/collaborative toggles. NOTE: album_quality cannot be changed after creation — that\'s a tier-gated, resolution-affecting choice and is locked at create time.',
   inputSchema: {
     type: 'object' as const,
     properties: {
@@ -384,6 +386,8 @@ export const updateEventDefinition = {
       description: { type: ['string', 'null'] },
       tag: { type: ['string', 'null'] },
       access_code: { type: 'string', description: '4-12 uppercase alphanumeric characters' },
+      enable_downloads: { type: 'boolean', description: 'Whether guests can download photos.' },
+      is_collaborative: { type: 'boolean', description: 'Whether other people can upload to this album.' },
     },
     required: ['event_id'],
     additionalProperties: false,
