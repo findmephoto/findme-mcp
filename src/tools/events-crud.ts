@@ -369,6 +369,7 @@ export const updateEventSchema = z.object({
   description: z.string().max(2000).nullable().optional(),
   tag: z.string().max(80).nullable().optional(),
   access_code: z.string().regex(/^[A-Z0-9]{4,12}$/).optional(),
+  album_quality: z.enum(ALBUM_QUALITY_VALUES).optional(),
   enable_downloads: z.boolean().optional(),
   is_collaborative: z.boolean().optional(),
 });
@@ -376,7 +377,7 @@ export const updateEventSchema = z.object({
 export const updateEventDefinition = {
   name: 'update_event',
   description:
-    'Update fields on an existing event: name, event_date, description, tag, access_code, enable_downloads (toggle guest downloads on/off), or is_collaborative (toggle whether other people can upload). Only include the fields you want to change. Use when the photographer wants to rename, re-date, re-code, or flip the downloads/collaborative toggles. NOTE: album_quality cannot be changed after creation — that\'s a tier-gated, resolution-affecting choice and is locked at create time.',
+    'Update fields on an existing event: name, event_date, description, tag, access_code, album_quality (storage resolution; changeable only before the first photo is uploaded, and tier-capped), enable_downloads (toggle guest downloads on/off), or is_collaborative (toggle whether other people can upload). Only include the fields you want to change. Use when the photographer wants to rename, re-date, re-code, change quality (pre-upload), or flip the downloads/collaborative toggles. If the photographer asks to change album_quality on an album that already has photos, the API will return a `conflict` error — relay that politely and explain they\'d need to delete photos first.',
   inputSchema: {
     type: 'object' as const,
     properties: {
@@ -386,6 +387,11 @@ export const updateEventDefinition = {
       description: { type: ['string', 'null'] },
       tag: { type: ['string', 'null'] },
       access_code: { type: 'string', description: '4-12 uppercase alphanumeric characters' },
+      album_quality: {
+        type: 'string',
+        enum: [...ALBUM_QUALITY_VALUES],
+        description: 'Storage resolution. Changeable only before the first photo is uploaded; tier-capped.',
+      },
       enable_downloads: { type: 'boolean', description: 'Whether guests can download photos.' },
       is_collaborative: { type: 'boolean', description: 'Whether other people can upload to this album.' },
     },

@@ -14,7 +14,7 @@ import { FindMeClient } from './client.js';
 import { makeElicitor } from './elicit.js';
 import { dispatchToolCall, TOOL_DEFINITIONS } from './registry.js';
 
-const PACKAGE_VERSION = '0.4.0';
+const PACKAGE_VERSION = '0.4.1';
 
 function main(): void {
   const apiKey = process.env.FINDME_API_KEY ?? '';
