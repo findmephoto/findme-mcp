@@ -20,6 +20,9 @@ import {
   getEventAnalyticsDefinition, getEventAnalyticsSchema, runGetEventAnalytics,
 } from './tools/events-crud.js';
 import {
+  getAccountInfoDefinition, runGetAccountInfo,
+} from './tools/get-account.js';
+import {
   getUsageDefinition, runGetUsage,
 } from './tools/get-usage.js';
 import {
@@ -28,9 +31,11 @@ import {
   uploadPhotosFromDriveFolderDefinition, uploadPhotosFromDriveFolderSchema, runUploadPhotosFromDriveFolder,
 } from './tools/upload.js';
 
-// Order matters in `tools/list` responses — upload tools first since they're
-// the primary photographer workflow.
+// Order matters in `tools/list` responses — get_account_info first so the
+// model sees it before the action tools, then uploads as the primary
+// photographer workflow.
 export const TOOL_DEFINITIONS: Tool[] = [
+  getAccountInfoDefinition,
   uploadPhotosFromPathsDefinition,
   uploadPhotosFromUrlsDefinition,
   uploadPhotosFromDriveFolderDefinition,
@@ -44,6 +49,27 @@ export const TOOL_DEFINITIONS: Tool[] = [
   getEventAnalyticsDefinition,
   getUsageDefinition,
 ];
+
+/**
+ * Server-level instructions surfaced to the AI in the `initialize` response.
+ * MCP-compliant clients (Claude.ai, Claude Desktop, ChatGPT, Cursor) include
+ * this in the model's system prompt for the session.
+ *
+ * Goal: get the model to call get_account_info once before any account-scoped
+ * action, so the photographer can confirm or correct the active account
+ * before anything is created/uploaded/imported.
+ */
+export const SERVER_INSTRUCTIONS = `FindMe Photo MCP — wedding gallery operations.
+
+CRITICAL FIRST STEP: Before listing events, creating events, uploading photos, or starting Drive imports, call get_account_info ONCE per session and surface the result to the photographer in one short line, e.g.:
+
+  "Connected to FindMe as info@studio.com (Free+) with Drive at info@studio.com. 12 events. ✓"
+
+This removes ambiguity for photographers who have multiple FindMe accounts (personal vs. studio) or multiple Google accounts (one for the AI, one for Drive). If the FindMe account email and the Drive Google email are different, name BOTH explicitly so the photographer can confirm or course-correct before action.
+
+If accounts_match is false and the photographer asks to import from Drive, warn them: "Drive imports will only see folders that <drive_email> has access to. If your photos are in a different Google account, share the folder with <drive_email> or reconnect Drive at https://findme.photo/profile."
+
+Voice: playful, confident, specific. Cite real numbers from tool responses. Don't hedge.`;
 
 /**
  * Tools that depend on local filesystem access (Node `fs`). HTTP transports
@@ -80,6 +106,8 @@ export async function dispatchToolCall(
 
   try {
     switch (name) {
+      case 'get_account_info':
+        return await runGetAccountInfo(client);
       case 'upload_photos_from_paths':
         return await runUploadPhotosFromPaths(client, uploadPhotosFromPathsSchema.parse(args));
       case 'upload_photos_from_urls':

@@ -19,7 +19,7 @@ import {
 import { FindMeClient } from './client.js';
 import { noopElicitor } from './elicit.js';
 import { ToolError } from './errors.js';
-import { dispatchToolCall, getRemoteSafeDefinitions } from './registry.js';
+import { dispatchToolCall, getRemoteSafeDefinitions, SERVER_INSTRUCTIONS } from './registry.js';
 
 export interface CreateMcpHandlerOptions {
   /**
@@ -79,7 +79,7 @@ export function createMcpHandler(opts: CreateMcpHandlerOptions): (req: Request) 
 
     const server = new Server(
       { name: serverName, version: serverVersion },
-      { capabilities: { tools: {} } },
+      { capabilities: { tools: {} }, instructions: SERVER_INSTRUCTIONS },
     );
 
     server.setRequestHandler(ListToolsRequestSchema, async () => ({

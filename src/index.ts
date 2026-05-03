@@ -12,9 +12,9 @@ import {
 
 import { FindMeClient } from './client.js';
 import { makeElicitor } from './elicit.js';
-import { dispatchToolCall, TOOL_DEFINITIONS } from './registry.js';
+import { dispatchToolCall, SERVER_INSTRUCTIONS, TOOL_DEFINITIONS } from './registry.js';
 
-const PACKAGE_VERSION = '0.4.1';
+const PACKAGE_VERSION = '0.5.0';
 
 function main(): void {
   const apiKey = process.env.FINDME_API_KEY ?? '';
@@ -31,7 +31,7 @@ function main(): void {
 
   const server = new Server(
     { name: 'findme-mcp', version: PACKAGE_VERSION },
-    { capabilities: { tools: {} } },
+    { capabilities: { tools: {} }, instructions: SERVER_INSTRUCTIONS },
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
