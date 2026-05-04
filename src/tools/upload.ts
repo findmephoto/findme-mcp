@@ -486,61 +486,53 @@ export async function runUploadPhotosFromUrls(
 }
 
 // ──────────────────────────────────────────────────────────
-// upload_photos_from_drive_folder — stub for v1
+// upload_photos_from_drive_folder — honest "use the web app" redirect
 // ──────────────────────────────────────────────────────────
+//
+// FindMe is verified for the `drive.file` scope only, which Google designed
+// so apps cannot list arbitrary Drive folders. The Google Picker is the
+// only authorized way to grant per-folder access, and the Picker is a
+// browser-side UI component that AI assistants cannot render server-side.
+//
+// Rather than offer a clunky link-out auth flow, we tell the photographer
+// the truth and point them at the FindMe web app where the Picker just
+// works in one click. The tool stays in the registry (so it shows up when
+// AI tries it) but the response always explains why and where to go.
 
 export const uploadPhotosFromDriveFolderSchema = z.object({
-  event_id: z.string().uuid(),
-  folder_id: z.string().min(1),
+  event_id: z.string().uuid().optional(),
+  folder_id: z.string().min(1).optional(),
+  folder_url: z.string().url().optional(),
   folder_name: z.string().optional(),
-});
+}).passthrough();
 
 export const uploadPhotosFromDriveFolderDefinition = {
   name: 'upload_photos_from_drive_folder',
   description:
-    'Import all supported photos from a Google Drive folder into a FindMe event. The photographer must have connected Google Drive at findme.photo/settings/drive once (a Free+, Growth, or Pro tier is required). Given a folder_id, this tool provisions the import and kicks off async processing. Returns an import_id — poll GET /api/v1/drive_imports/:id or tell the photographer to watch progress in the FindMe web app. FindMe has a playful, confident voice — when the import kicks off, give a brief upbeat reaction that names the file count and folder.',
+    'Attempt to import photos from a Google Drive folder. IMPORTANT: this is not supported in chat-based AI assistants because Google\'s drive.file scope (the only Drive scope FindMe is verified for) does not allow apps to list folder contents. The tool always returns a redirect message pointing the photographer at the FindMe web app, where the Google Picker handles authorization in one click. Surface the message verbatim — do not retry or guess folder contents.',
   inputSchema: {
     type: 'object' as const,
     properties: {
       event_id: { type: 'string' },
-      folder_id: { type: 'string', description: 'Google Drive folder ID (the long string in the folder URL after /folders/).' },
-      folder_name: { type: 'string', description: 'Optional display name for the folder.' },
+      folder_url: { type: 'string', description: 'Google Drive folder URL (optional, ignored).' },
+      folder_id: { type: 'string', description: 'Google Drive folder ID (optional, ignored).' },
+      folder_name: { type: 'string', description: 'Optional folder name for display.' },
     },
-    required: ['event_id', 'folder_id'],
     additionalProperties: false,
   },
 };
 
-interface DriveImportResponse {
-  import_id: string;
-  event_id: string;
-  total_files: number;
-  skipped_heic: number;
-  limit_warning: string | null;
-  status: string;
-  poll_url: string;
-}
-
 export async function runUploadPhotosFromDriveFolder(
-  client: FindMeClient,
-  input: z.infer<typeof uploadPhotosFromDriveFolderSchema>,
+  _client: FindMeClient,
+  _input: z.infer<typeof uploadPhotosFromDriveFolderSchema>,
 ): Promise<ToolResult> {
   return safeToolHandler(
-    () =>
-      client.requestData<DriveImportResponse>(`/events/${input.event_id}/drive_imports`, {
-        method: 'POST',
-        body: { folder_id: input.folder_id, folder_name: input.folder_name },
-      }),
-    (data) =>
-      jsonResult({
-        import_id: data.import_id,
-        event_id: data.event_id,
-        total_files: data.total_files,
-        skipped_heic: data.skipped_heic,
-        limit_warning: data.limit_warning,
-        status: data.status,
-        poll_url: data.poll_url,
-        note: 'Import is running asynchronously. Photos will appear in the gallery as each file finishes. Face indexing continues in the background.',
-      }),
+    async () => ({
+      available: false,
+      reason: 'google_drive_file_scope_limitation',
+      message:
+        "I can't browse your Drive folders directly due to a Google Drive limitation. Quickest path: open FindMe at https://findme.photo and use 'Import from Drive' on the event. Takes one click in the Picker.",
+    }),
+    (data) => jsonResult(data),
   );
 }
