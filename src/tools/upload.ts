@@ -6,6 +6,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 
+import sharp, { type Metadata } from 'sharp';
 import { z } from 'zod';
 
 import type { FindMeClient } from '../client.js';
@@ -32,6 +33,74 @@ const VIDEO_EXT: Record<string, string> = {
 function expandHome(p: string): string {
   if (p.startsWith('~')) return path.join(os.homedir(), p.slice(1));
   return p;
+}
+
+// ──────────────────────────────────────────────────────────
+// Client-side resize — mirror the web uploader (src/hooks/use-photo-upload.ts)
+//
+// The web app resizes each photo to the album's stored quality before upload;
+// the MCP historically uploaded originals unresized, so AI albums consumed more
+// storage and served heavier downloads than the photographer's chosen quality.
+// We now resize here to match. Format is preserved (the presigned PUT signs the
+// content-type, and the S3 key keeps the original extension — converting would
+// break both). EXIF orientation is baked in so stored dims match what shows.
+// ──────────────────────────────────────────────────────────
+
+const QUALITY_LONG_SIDE: Record<string, number> = {
+  '800px': 800,
+  '3000px': 3000,
+  '4000px': 4000,
+};
+const FULL_SIZE_MAX_BYTES = 15 * 1024 * 1024; // '15mb' albums keep originals up to this
+const FULL_SIZE_LONG_SIDE = 8000; // ...then compress to 8000px (also the server-side cap for 15mb)
+const JPEG_QUALITY = 85; // matches the web uploader's 0.85
+
+interface ProcessedImage {
+  buffer: Buffer;
+  width: number;
+  height: number;
+}
+
+// EXIF orientation 5-8 are 90/270° rotations → displayed dims are swapped.
+function orientedDims(meta: Metadata): { width: number; height: number } {
+  const w = meta.width ?? 0;
+  const h = meta.height ?? 0;
+  const o = meta.orientation ?? 1;
+  return o >= 5 && o <= 8 ? { width: h, height: w } : { width: w, height: h };
+}
+
+async function processPhoto(
+  filepath: string,
+  contentType: string,
+  sizeBytes: number,
+  albumQuality: string,
+): Promise<ProcessedImage> {
+  const isFullSize = albumQuality === '15mb';
+
+  // Full-size albums keep the original bytes — unless the file is over the size
+  // budget OR larger than the 8000px server cap, in which case we compress.
+  if (isFullSize) {
+    const meta = await sharp(filepath).metadata();
+    const dims = orientedDims(meta);
+    const longSide = Math.max(dims.width, dims.height);
+    if (sizeBytes <= FULL_SIZE_MAX_BYTES && longSide <= FULL_SIZE_LONG_SIDE) {
+      return { buffer: await fsp.readFile(filepath), width: dims.width, height: dims.height };
+    }
+  }
+
+  const targetLongSide = isFullSize ? FULL_SIZE_LONG_SIDE : (QUALITY_LONG_SIDE[albumQuality] ?? 3000);
+
+  let pipeline = sharp(filepath)
+    .rotate() // bake EXIF orientation, then strip the tag
+    .resize({ width: targetLongSide, height: targetLongSide, fit: 'inside', withoutEnlargement: true });
+
+  // Preserve format; set quality only for the lossy encoders.
+  if (contentType === 'image/png') pipeline = pipeline.png();
+  else if (contentType === 'image/webp') pipeline = pipeline.webp({ quality: JPEG_QUALITY });
+  else pipeline = pipeline.jpeg({ quality: JPEG_QUALITY });
+
+  const { data, info } = await pipeline.toBuffer({ resolveWithObject: true });
+  return { buffer: data, width: info.width, height: info.height };
 }
 
 /**
@@ -94,7 +163,7 @@ export const uploadPhotosFromPathsSchema = z.object({
 export const uploadPhotosFromPathsDefinition = {
   name: 'upload_photos_from_paths',
   description:
-    'Upload photos or videos from local file paths on the photographer\'s computer to a FindMe event. Each path can be a file, a directory (all supported files inside are uploaded), or a glob (basic). Supported formats: .jpg .jpeg .png .webp .mp4 .mov .webm. Max 50 files per call; auto-chunks if more are found. Max size per file: 50 MB for photos, 500 MB for videos. This is the primary upload tool — prefer it when the photographer says things like "upload all photos in ~/Pictures/Sarah" or "add these files to the Johnson event". On success the response includes rich stats (duration, size, photo/video counts, faces indexing). FindMe has a playful, confident voice — present completions with a specific, upbeat one-liner that cites real numbers. Do not use the same phrasing twice.',
+    'Upload photos or videos from local file paths on the photographer\'s computer to a FindMe event. Each path can be a file, a directory (all supported files inside are uploaded), or a glob (basic). Supported formats: .jpg .jpeg .png .webp .mp4 .mov .webm. Max 50 files per call; auto-chunks if more are found. Max size per file: 50 MB for photos, 500 MB for videos. Photos are automatically resized to the album\'s storage quality before upload (full-size albums keep originals). This is the primary upload tool — prefer it when the photographer says things like "upload all photos in ~/Pictures/Sarah" or "add these files to the Johnson event". On success the response includes rich stats (duration, size, photo/video counts, faces indexing). FindMe has a playful, confident voice — present completions with a specific, upbeat one-liner that cites real numbers. Do not use the same phrasing twice.',
   inputSchema: {
     type: 'object' as const,
     properties: {
@@ -114,6 +183,7 @@ export const uploadPhotosFromPathsDefinition = {
 
 interface InitiateUpload {
   batch_id: string;
+  album_quality?: string;
   uploads: Array<{
     photo_id: string;
     filename: string;
@@ -155,9 +225,14 @@ async function uploadOneBatch(
     },
   });
 
-  // 2. Stream each file to its presigned URL (parallel up to PARALLEL_S3_PUTS)
+  const albumQuality = initiate.album_quality ?? '3000px';
+
+  // 2. Resize (photos) + stream each file to its presigned URL (parallel up to
+  // PARALLEL_S3_PUTS). Resized dims/sizes are captured per photo_id so /confirm
+  // can persist accurate width/height + file_size_bytes.
   const outcomes: PerFileOutcome[] = [];
   const putResults: Array<{ photo_id: string; ok: boolean; reason?: string }> = [];
+  const dimsByPhotoId = new Map<string, { width: number; height: number; size_bytes: number }>();
 
   for (let i = 0; i < initiate.uploads.length; i += PARALLEL_S3_PUTS) {
     const slice = initiate.uploads.slice(i, i + PARALLEL_S3_PUTS);
@@ -166,7 +241,25 @@ async function uploadOneBatch(
         const local = files.find((f) => f.filename === u.filename);
         if (!local) return { photo_id: u.photo_id, ok: false, reason: 'file_not_found_locally' };
         try {
-          const body = await fsp.readFile(local.filepath);
+          let body: Buffer;
+          if (local.mediaKind === 'photo') {
+            try {
+              const processed = await processPhoto(local.filepath, local.contentType, local.size, albumQuality);
+              body = processed.buffer;
+              dimsByPhotoId.set(u.photo_id, {
+                width: processed.width,
+                height: processed.height,
+                size_bytes: processed.buffer.length,
+              });
+            } catch {
+              // Resize/decode failed — upload the original bytes instead. The
+              // server still backfills dims from S3 (no client dims sent), so
+              // the gallery renders; we just don't shrink this one.
+              body = await fsp.readFile(local.filepath);
+            }
+          } else {
+            body = await fsp.readFile(local.filepath);
+          }
           const res = await fetch(u.presigned_url, {
             method: 'PUT',
             headers: { 'Content-Type': local.contentType },
@@ -184,14 +277,21 @@ async function uploadOneBatch(
     putResults.push(...results);
   }
 
-  // 3. Confirm — server marks each photo completed/indexing/error
+  // 3. Confirm — server marks each photo completed/indexing/error. Send the
+  // resized dims so the server stores width/height + the real file_size_bytes.
   const succeededIds = putResults.filter((r) => r.ok).map((r) => r.photo_id);
+  const dimensions = succeededIds
+    .map((id) => {
+      const d = dimsByPhotoId.get(id);
+      return d ? { photo_id: id, width: d.width, height: d.height, size_bytes: d.size_bytes } : null;
+    })
+    .filter((d): d is { photo_id: string; width: number; height: number; size_bytes: number } => d !== null);
   let confirmed: ConfirmResult['confirmed'] = [];
   if (succeededIds.length > 0) {
     try {
       const result = await client.requestData<ConfirmResult>(`/events/${eventId}/photos/confirm`, {
         method: 'POST',
-        body: { photo_ids: succeededIds },
+        body: { photo_ids: succeededIds, ...(dimensions.length > 0 ? { dimensions } : {}) },
       });
       confirmed = result.confirmed;
     } catch (err) {
@@ -224,7 +324,7 @@ async function uploadOneBatch(
         photo_id: u.photo_id,
         final_status: conf?.status,
         reason: conf?.reason,
-        size_bytes: local?.size,
+        size_bytes: dimsByPhotoId.get(u.photo_id)?.size_bytes ?? local?.size,
       });
     }
   }
@@ -353,7 +453,7 @@ export const uploadPhotosFromUrlsSchema = z.object({
 export const uploadPhotosFromUrlsDefinition = {
   name: 'upload_photos_from_urls',
   description:
-    'Upload photos/videos from public URLs to a FindMe event. Useful when the photographer shares Dropbox links, direct Drive download URLs, or similar. The MCP server downloads each URL to a temp buffer and streams it to the event. Max 50 URLs per call. On success the response includes rich stats (duration, size, photo/video counts). FindMe has a playful, confident voice — celebrate completions with a specific, upbeat one-liner that cites real numbers. Do not use the same phrasing twice.',
+    'Upload photos/videos from public URLs to a FindMe event. Useful when the photographer shares Dropbox links, direct Drive download URLs, or similar. The MCP server downloads each URL to a temp buffer and streams it to the event. Photos are automatically resized to the album\'s storage quality before upload (full-size albums keep originals). Max 50 URLs per call. On success the response includes rich stats (duration, size, photo/video counts). FindMe has a playful, confident voice — celebrate completions with a specific, upbeat one-liner that cites real numbers. Do not use the same phrasing twice.',
   inputSchema: {
     type: 'object' as const,
     properties: {
