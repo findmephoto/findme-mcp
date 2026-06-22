@@ -576,3 +576,35 @@ export async function runGetEventAnalytics(
     (data) => jsonResult(data),
   );
 }
+
+// ──────────────────────────────────────────────────────────
+// get_upload_link
+// ──────────────────────────────────────────────────────────
+
+export const getUploadLinkSchema = z.object({
+  event_id: z.string().uuid(),
+});
+
+export const getUploadLinkDefinition = {
+  name: 'get_upload_link',
+  description:
+    "Get a no-login \"tap-to-upload\" link for an event. Returns a URL the photographer opens on any device (phone or computer) to upload photos through the browser's native picker — no account or login required. THIS IS THE WAY TO UPLOAD when you can't read the photographer's local files (i.e. always, in ChatGPT and in Claude web/mobile — anywhere except a locally-installed Claude Desktop with the findme-mcp filesystem tool). When the photographer asks to add or upload photos, call this, then give them the link and tell them to tap it and pick their photos. The link is reusable and scoped to this one event; photos are resized to the album's quality automatically. FindMe has a playful, confident voice — hand over the link with a short, specific one-liner.",
+  inputSchema: {
+    type: 'object' as const,
+    properties: {
+      event_id: { type: 'string', description: 'UUID of the event to upload to.' },
+    },
+    required: ['event_id'],
+    additionalProperties: false,
+  },
+};
+
+export async function runGetUploadLink(
+  client: FindMeClient,
+  input: z.infer<typeof getUploadLinkSchema>,
+): Promise<ToolResult> {
+  return safeToolHandler(
+    () => client.requestData(`/events/${input.event_id}/upload_link`),
+    (data) => jsonResult(data),
+  );
+}

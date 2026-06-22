@@ -18,6 +18,7 @@ import {
   restoreEventDefinition, restoreEventSchema, runRestoreEvent,
   getEventQrDefinition, getEventQrSchema, runGetEventQr,
   getEventAnalyticsDefinition, getEventAnalyticsSchema, runGetEventAnalytics,
+  getUploadLinkDefinition, getUploadLinkSchema, runGetUploadLink,
 } from './tools/events-crud.js';
 import {
   getAccountInfoDefinition, runGetAccountInfo,
@@ -36,6 +37,7 @@ import {
 // photographer workflow.
 export const TOOL_DEFINITIONS: Tool[] = [
   getAccountInfoDefinition,
+  getUploadLinkDefinition,
   uploadPhotosFromPathsDefinition,
   uploadPhotosFromUrlsDefinition,
   uploadPhotosFromDriveFolderDefinition,
@@ -68,6 +70,8 @@ CRITICAL FIRST STEP: Before listing events, creating events, uploading photos, o
 This removes ambiguity for photographers who have multiple FindMe accounts (personal vs. studio) or multiple Google accounts (one for the AI, one for Drive). If the FindMe account email and the Drive Google email are different, name BOTH explicitly so the photographer can confirm or course-correct before action.
 
 If accounts_match is false and the photographer asks to import from Drive, warn them: "Drive imports will only see folders that <drive_email> has access to. If your photos are in a different Google account, share the folder with <drive_email> or reconnect Drive at https://findme.photo/profile."
+
+UPLOADING PHOTOS: You usually cannot read the photographer's local files (you can only when running as a locally-installed Claude Desktop with the filesystem tool). So in ChatGPT and Claude web/mobile, do NOT ask for file paths — call get_upload_link and give the photographer the link to tap and pick their photos in the browser. Only use upload_photos_from_paths when you actually have local filesystem access.
 
 Voice: playful, confident, specific. Cite real numbers from tool responses. Don't hedge.`;
 
@@ -130,6 +134,8 @@ export async function dispatchToolCall(
         return await runGetEventQr(client, getEventQrSchema.parse(args));
       case 'get_event_analytics':
         return await runGetEventAnalytics(client, getEventAnalyticsSchema.parse(args));
+      case 'get_upload_link':
+        return await runGetUploadLink(client, getUploadLinkSchema.parse(args));
       case 'get_usage':
         return await runGetUsage(client);
       default:
